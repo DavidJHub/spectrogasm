@@ -1,9 +1,22 @@
 """Telluric radial-velocity lookup and rest-frame shift.
 
-Telluric absorption lines should sit at known laboratory wavelengths; any
-non-zero radial velocity measured from them is Earth's motion projected
-onto the line of sight. We undo it on the calibrated spectrum so stellar
-features land at rest-frame wavelengths.
+The wavelength scale ``lambda_cal`` produced by ``pipeline.calibrate_night``
+is in the frame of the upstream UVES data reduction, which is *not*
+topocentric: telluric O2 lines in this dataset appear at velocities
+ranging from −15 km/s (Feb) to −25 km/s (Apr), a clean seasonal pattern
+that matches Earth's barycentric motion toward HD 49331. So the upstream
+data already lives in a barycentric-like frame and the telluric
+velocity in ``manifest.TELLURIC_KMS`` is, in practice, the apparent
+shift of topocentric O2 lines in that frame (≈ -v_bary).
+
+To put the stellar absorption lines at their laboratory rest wavelengths
+we have to **undo** that upstream correction, i.e. shift back toward
+topocentric. The empirical signature is unmistakable: the previous
+implementation (which applied the correction in the opposite direction)
+left ``v_rad + 2·v_tel`` constant to 0.7 km/s across 11 nights spanning
+a 22 km/s swing in v_rad, indicating the correction was being applied
+twice in the same direction. ``to_rest_frame`` now applies it once in
+the correct direction.
 """
 
 from __future__ import annotations
@@ -43,9 +56,15 @@ def telluric_velocity(iso_date: str) -> float:
 
 
 def to_rest_frame(lambda_obs: np.ndarray, v_kms: float) -> np.ndarray:
-    """Shift an observed wavelength array to the rest frame.
+    """Shift an observed wavelength array toward the (telluric) rest frame.
 
-    If telluric lines appear at v_kms (negative = blueshift), the observed
-    spectrum is multiplied by 1/(1 + v/c) to put those lines back at rest.
+    Given the upstream frame described above, the correct transform is::
+
+        lambda_rest = lambda_obs * (1 + v_kms / c)
+
+    which, for the typical ``v_kms < 0`` of this dataset, shifts every
+    wavelength *down* by ~0.48 Å — exactly cancelling the seasonal trend
+    seen in ``v_rad`` across the 11 observed nights.
     """
-    return lambda_obs / (1.0 + v_kms / C_KMS)
+    return lambda_obs * (1.0 + v_kms / C_KMS)
+
