@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Pipeline outputs
+results/
+
+
 # C extensions
 *.so
 
