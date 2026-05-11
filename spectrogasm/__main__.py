@@ -18,6 +18,7 @@ import sys
 from .drift import plot_drift
 from .manifest import NIGHTS, RESULTS_DIR
 from .pipeline import calibrate_all
+from .radial_velocity import plot_rv_drift
 
 
 def main(argv: list[str]) -> None:
@@ -36,13 +37,18 @@ def main(argv: list[str]) -> None:
         print(
             f"  {r.night.date}  deg={r.solution.degree}  "
             f"rms={r.solution.rms:.4f} A  v_tel={r.telluric_kms:+.3f} km/s  "
-            f"seed={r.seed_origin}  -> {r.out_dir}"
+            f"v_rad={r.rv_summary.v_mean_kms:+.3f}+/-{r.rv_summary.v_sem_kms:.3f} km/s "
+            f"(n={r.rv_summary.n_used})  seed={r.seed_origin}  -> {r.out_dir}"
         )
 
     if len(results) >= 2:
         drift_path = RESULTS_DIR / "drift.png"
         plot_drift(RESULTS_DIR, drift_path)
         print(f"\nDrift plot: {drift_path}")
+
+        rv_path = RESULTS_DIR / "rv_drift.png"
+        plot_rv_drift(RESULTS_DIR, rv_path)
+        print(f"Radial-velocity plot: {rv_path}")
 
 
 if __name__ == "__main__":
