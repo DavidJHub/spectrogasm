@@ -12,10 +12,21 @@ To get heliocentric velocity, ``spectrogasm.barycentric`` adds the
 projection of Earth's velocity in the barycentric frame onto the line
 of sight to the target.
 
-For each laboratory line we fit an inverted Gaussian to a small window
-of the spectrum (robust wing continuum, bounded sigma, one MAD-clip
-pass on the residual), take the fitted centre as ``lambda_obs``, and
-combine the per-line velocities with MAD outlier rejection.
+**Estimator (heuristic, not a model fit).** For each laboratory line
+we take the deepest pixel within ``±half_window`` of ``lambda_lab``
+and refine its position with a parabolic interpolation through the
+three points around the minimum. This is the spreadsheet-style "find
+the dip, compute Doppler" approach: no Gaussian shape assumption, no
+bounds on sigma or mu, no constraint that the line look like a clean
+absorption. The per-line velocities are then combined with a MAD
+outlier rejection.
+
+Why heuristic over Gaussian: the previous fitter constrained ``mu``
+to ``±0.30 A`` around the lab wavelength, which was too tight for
+this dataset (the strongest features sit ~+0.7 A redward in
+``lambda_rest`` for several lines), and the Gaussian shape biased
+the centre toward whatever pixel had the lowest noise rather than
+the actual line bottom.
 """
 
 from __future__ import annotations
@@ -25,91 +36,107 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import curve_fit
 
 
 C_KMS = 299_792.458
 
 
-# Laboratory rest wavelengths (air, Å) for the stellar absorption lines
-# used to measure the radial velocity.
-#
-# HD 49331 is an M1 III giant: its visible spectrum is dominated by
-# molecular bands (TiO, CN) that wash out weak atomic features. The
-# 2024-03-12 and 2024-03-19 rv_diagnostic plots show no absorption at
-# lambda_lab for V 6039.7256, V 6081.4422 and V 6090.2084 (the deepest
-# features in those windows are unrelated lines ~+1 A redward, which
-# previously biased the estimator). Keep only the three lines that are
-# reliably visible in this spectral type.
+# Laboratory rest wavelengths (air, Å, VALD-like values) for the stellar
+# absorption lines used to measure the radial velocity. All six are in
+# UVES echelle order 37 (5970-6180 Å).
 STELLAR_LINES: list[tuple[str, float]] = [
+    ("V",  6039.7256),
     ("V",  6058.1420),
-    ("Ni", 6108.1159),
-    ("Ti", 6126.2160),
-]
-
-# Full original line list. Re-enable selectively if running on a star of
-# a different spectral type where the V lines are stronger.
-STELLAR_LINES_EXTENDED: list[tuple[str, float]] = [
-    ("V",  6039.7256),  # disabled: no absorption at lam_lab in HD 49331 (M1 III)
-    ("V",  6058.1420),
-    ("V",  6081.4422),  # disabled: no absorption at lam_lab in HD 49331 (M1 III)
-    ("V",  6090.2084),  # disabled: no absorption at lam_lab in HD 49331 (M1 III)
+    ("V",  6081.4422),
+    ("V",  6090.2084),
     ("Ni", 6108.1159),
     ("Ti", 6126.2160),
 ]
 
 
-# --- Profile and per-line helpers -----------------------------------------
+# --- Helpers --------------------------------------------------------------
 
 @dataclass
 class LineFit:
     element: str
     lambda_lab: float
     lambda_obs: float
-    sigma: float
-    depth: float
+    sigma: float            # half-width estimate (Å), from FWHM/2.355
+    depth: float            # continuum - intensity at minimum
     continuum: float
     v_kms: float
-    rms: float
+    rms: float              # not meaningful for the heuristic; left as NaN
     n_points: int
     ok: bool
     reason: str = ""
 
 
-def _gaussian_absorption(
-    lam: np.ndarray, mu: float, sigma: float, amp: float, cont: float
-) -> np.ndarray:
-    return cont - amp * np.exp(-0.5 * ((lam - mu) / sigma) ** 2)
-
-
 def _wing_continuum(
     x: np.ndarray, y: np.ndarray, mu: float, core_half: float, percentile: float = 80.0
 ) -> float:
-    """Estimate the continuum from points OUTSIDE the line core.
-
-    Uses an upper percentile of the wing samples so a few low outliers in
-    the wings cannot drag the level down toward the absorption.
-    """
+    """Upper-percentile of the wing samples (outside ±core_half of ``mu``)."""
     wing = np.abs(x - mu) > core_half
     sample = y[wing] if wing.sum() >= 3 else y
     return float(np.percentile(sample, percentile))
 
 
-# --- Per-line fit ---------------------------------------------------------
+def _parabolic_vertex(
+    x_left: float, x_mid: float, x_right: float,
+    y_left: float, y_mid: float, y_right: float,
+) -> float:
+    """Vertex of the parabola through three (x, y) points. Falls back
+    to ``x_mid`` if the points are not concave-up."""
+    denom = y_left - 2.0 * y_mid + y_right
+    if denom <= 0:
+        return x_mid
+    # Standard 3-point parabolic interpolation, written in absolute x so
+    # it tolerates non-uniform sampling (the calibrated grid is close to
+    # uniform but not exactly).
+    dx_left = x_mid - x_left
+    dx_right = x_right - x_mid
+    dx = 0.5 * (dx_left + dx_right)
+    offset = 0.5 * (y_left - y_right) / denom
+    return x_mid + offset * dx
 
-def fit_absorption_line(
+
+def _half_width_at_half_min(
+    x: np.ndarray, y: np.ndarray, i_min: int, continuum: float
+) -> float:
+    """Rough HWHM of the absorption profile (Å), used only for the plot."""
+    depth = continuum - y[i_min]
+    if depth <= 0:
+        return float("nan")
+    half_level = continuum - 0.5 * depth
+    # Walk left/right from the minimum until we cross half_level.
+    left = i_min
+    while left > 0 and y[left] < half_level:
+        left -= 1
+    right = i_min
+    while right < x.size - 1 and y[right] < half_level:
+        right += 1
+    return 0.5 * (x[right] - x[left])
+
+
+# --- Per-line measurement -------------------------------------------------
+
+def measure_line_shift(
     lam: np.ndarray,
     intensity: np.ndarray,
     lam_lab: float,
     half_window: float = 2.0,
-    min_points: int = 7,
-    sigma_min: float = 0.08,
-    sigma_max: float = 0.40,
-    core_half: float = 0.45,
-    mu_search_half: float = 0.30,
-    clip_kappa: float = 3.0,
+    min_points: int = 5,
 ) -> LineFit:
-    """Fit an inverted Gaussian with robust continuum + bounded sigma + clip."""
+    """Heuristic line-centre finder + Doppler velocity.
+
+    1. Take the deepest pixel within ``±half_window`` of ``lam_lab``.
+    2. Refine sub-pixel with a parabola through the deepest pixel and
+       its two neighbours.
+    3. Compute ``v = c (lambda_centre - lambda_lab) / lambda_lab``.
+
+    No bounds on the search window beyond ``half_window`` — if the line
+    really sits +0.7 A redward of the lab value because the spectrum's
+    rest frame is mis-aligned, we still find it.
+    """
     mask = (lam >= lam_lab - half_window) & (lam <= lam_lab + half_window)
     x = lam[mask]
     y = intensity[mask]
@@ -121,55 +148,25 @@ def fit_absorption_line(
             n_points=int(x.size), ok=False, reason="too few points in window",
         )
 
-    cont0 = _wing_continuum(x, y, mu=lam_lab, core_half=core_half, percentile=80.0)
-
-    # Seed mu at the deepest pixel near lam_lab, not lam_lab itself.
-    near = np.abs(x - lam_lab) <= mu_search_half
-    if near.any():
-        mu0 = float(x[near][int(np.argmin(y[near]))])
-    else:
-        mu0 = float(lam_lab)
-
-    depth0 = max(cont0 - float(np.min(y[near] if near.any() else y)), 1.0)
-    sigma0 = max(sigma_min, min(0.15, sigma_max))
-
-    p0 = [mu0, sigma0, depth0, cont0]
-    bounds = (
-        [lam_lab - mu_search_half, sigma_min, 0.0,           0.0],
-        [lam_lab + mu_search_half, sigma_max, 5.0 * cont0,   5.0 * cont0 + 1.0],
-    )
-
-    def _do_fit(xx: np.ndarray, yy: np.ndarray):
-        return curve_fit(_gaussian_absorption, xx, yy, p0=p0, bounds=bounds, maxfev=5000)
-
-    try:
-        popt, _ = _do_fit(x, y)
-    except (RuntimeError, ValueError) as exc:
-        return LineFit(
-            element="", lambda_lab=lam_lab, lambda_obs=np.nan, sigma=np.nan,
-            depth=np.nan, continuum=np.nan, v_kms=np.nan, rms=np.nan,
-            n_points=int(x.size), ok=False, reason=f"fit failed: {exc}",
+    i_min = int(np.argmin(y))
+    if 0 < i_min < x.size - 1:
+        lambda_obs = _parabolic_vertex(
+            x[i_min - 1], x[i_min], x[i_min + 1],
+            float(y[i_min - 1]), float(y[i_min]), float(y[i_min + 1]),
         )
+    else:
+        lambda_obs = float(x[i_min])
 
-    # One sigma-clip pass on the residual to kill cosmics / dropouts.
-    resid = y - _gaussian_absorption(x, *popt)
-    mad = np.median(np.abs(resid - np.median(resid)))
-    if mad > 0:
-        keep = np.abs(resid - np.median(resid)) <= clip_kappa * 1.4826 * mad
-        if keep.sum() >= min_points and keep.sum() < x.size:
-            try:
-                popt, _ = _do_fit(x[keep], y[keep])
-                resid = y[keep] - _gaussian_absorption(x[keep], *popt)
-            except (RuntimeError, ValueError):
-                pass
-
-    mu, sigma, amp, cont = popt
-    rms = float(np.sqrt(np.mean(resid ** 2)))
-    v = C_KMS * (mu - lam_lab) / lam_lab
+    continuum = _wing_continuum(x, y, mu=lam_lab, core_half=0.45, percentile=80.0)
+    depth = float(max(continuum - float(y[i_min]), 0.0))
+    hwhm = _half_width_at_half_min(x, y, i_min, continuum)
+    sigma = hwhm / np.sqrt(2.0 * np.log(2.0)) if hwhm == hwhm else float("nan")
+    v = C_KMS * (lambda_obs - lam_lab) / lam_lab
 
     return LineFit(
-        element="", lambda_lab=lam_lab, lambda_obs=float(mu), sigma=float(sigma),
-        depth=float(amp), continuum=float(cont), v_kms=float(v), rms=rms,
+        element="", lambda_lab=lam_lab, lambda_obs=float(lambda_obs),
+        sigma=float(sigma), depth=depth, continuum=float(continuum),
+        v_kms=float(v), rms=float("nan"),
         n_points=int(x.size), ok=True,
     )
 
@@ -180,7 +177,7 @@ def measure_rv_night(
     half_window: float = 2.0,
     lambda_col: str = "lambda_rest",
 ) -> pd.DataFrame:
-    """Fit every line independently."""
+    """Heuristic shift for every line in ``lines``."""
     if lambda_col not in star.columns:
         raise KeyError(
             f"Star spectrum has no '{lambda_col}' column; "
@@ -192,7 +189,7 @@ def measure_rv_night(
 
     rows: list[dict] = []
     for element, lam_lab in lines:
-        fit = fit_absorption_line(lam, intensity, lam_lab, half_window=half_window)
+        fit = measure_line_shift(lam, intensity, lam_lab, half_window=half_window)
         fit.element = element
         rows.append(fit.__dict__)
 
@@ -241,18 +238,13 @@ def summarize_rv(per_line: pd.DataFrame, mad_kappa: float = 3.0) -> RVSummary:
 def plot_rv_diagnostic(
     star: pd.DataFrame,
     out_path: str | Path,
-    lines: list[tuple[str, float]] = STELLAR_LINES_EXTENDED,
+    lines: list[tuple[str, float]] = STELLAR_LINES,
     context_half: float = 5.0,
     fit_half: float = 2.0,
     lambda_col: str = "lambda_rest",
     title: str = "Diagnóstico  ·  contexto de cada línea estelar",
 ) -> None:
-    """One panel per line showing a *wider* spectral context.
-
-    Marks the laboratory wavelength (solid), the fit window (shaded), and
-    a robust local continuum (horizontal). Helps decide visually whether
-    each line is actually present at the expected position.
-    """
+    """One panel per line showing a *wider* spectral context."""
     import matplotlib.pyplot as plt
 
     from . import style as _style  # noqa: F401
@@ -276,7 +268,7 @@ def plot_rv_diagnostic(
 
         ax.axvspan(lam_lab - fit_half, lam_lab + fit_half,
                    color=with_alpha(SECONDARY, 0.18), linewidth=0,
-                   label="ventana de ajuste")
+                   label="ventana de búsqueda")
         ax.axvline(lam_lab, color=PRIMARY, ls="--", lw=1.6,
                    label=f"λ_lab = {lam_lab:.3f}")
 
@@ -301,7 +293,7 @@ def plot_rv_diagnostic(
     plt.close(fig)
 
 
-# --- Per-line fit panel plot ----------------------------------------------
+# --- Per-line measurement plot --------------------------------------------
 
 def plot_rv_fits(
     star: pd.DataFrame,
@@ -309,9 +301,9 @@ def plot_rv_fits(
     out_path: str | Path,
     half_window: float = 2.0,
     lambda_col: str = "lambda_rest",
-    title: str = "Ajustes Doppler  ·  V / Ni / Ti",
+    title: str = "Corrimientos Doppler  ·  V / Ni / Ti",
 ) -> None:
-    """One small panel per laboratory line with the fitted Gaussian on top."""
+    """One panel per line: data points, λ_lab marker, measured centre."""
     import matplotlib.pyplot as plt
 
     from . import style as _style  # noqa: F401
@@ -329,26 +321,29 @@ def plot_rv_fits(
     for ax, (_, row) in zip(axes, per_line.iterrows()):
         lam_lab = row["lambda_lab"]
         mask = (lam >= lam_lab - half_window) & (lam <= lam_lab + half_window)
-        ax.scatter(lam[mask], intensity[mask],
-                   s=14, color=DARK, alpha=0.75, edgecolor="none")
+        x = lam[mask]
+        y = intensity[mask]
+        ax.plot(x, y, color=DARK, lw=1.2, alpha=0.7)
+        ax.scatter(x, y, s=22, color=DARK, alpha=0.85, edgecolor="none")
         if row["ok"]:
-            xx = np.linspace(lam_lab - half_window, lam_lab + half_window, 400)
-            yy = _gaussian_absorption(xx, row["lambda_obs"], row["sigma"],
-                                      row["depth"], row["continuum"])
-            ax.plot(xx, yy, color=PRIMARY, lw=2.2)
-            ax.fill_between(xx, yy, row["continuum"],
-                            color=with_alpha(SECONDARY, 0.25), linewidth=0)
-            ax.axvline(row["lambda_obs"], color=PRIMARY, ls="--", lw=1.0)
+            if np.isfinite(row["continuum"]):
+                ax.axhline(row["continuum"], color=LIGHT, ls=":", lw=1.0)
+            ax.axvline(row["lambda_obs"], color=PRIMARY, ls="-", lw=1.6,
+                       label=f"λ_obs = {row['lambda_obs']:.3f}")
+            shift = row["lambda_obs"] - lam_lab
             ax.set_title(
-                f"{row['element']} {lam_lab:.3f}   v = {row['v_kms']:+.2f} km/s",
-                fontsize=11,
+                f"{row['element']} {lam_lab:.3f}   "
+                f"Δλ = {shift:+.3f} Å   v = {row['v_kms']:+.2f} km/s",
+                fontsize=10,
             )
         else:
-            ax.set_title(f"{row['element']} {lam_lab:.3f}   (ajuste falló)",
-                         fontsize=11, color=DARK)
-        ax.axvline(lam_lab, color=LIGHT, ls=":", lw=1.2)
+            ax.set_title(f"{row['element']} {lam_lab:.3f}   (sin datos)",
+                         fontsize=10, color=DARK)
+        ax.axvline(lam_lab, color=SECONDARY, ls="--", lw=1.2,
+                   label=f"λ_lab = {lam_lab:.3f}")
         ax.set_xlabel("λ (Å)", fontsize=10)
         ax.set_ylabel("I", fontsize=10)
+        ax.legend(loc="best", fontsize=7, framealpha=0.85)
         style_axes(ax)
 
     for ax in axes[n:]:
