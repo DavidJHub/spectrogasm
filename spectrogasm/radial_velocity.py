@@ -168,41 +168,50 @@ def plot_rv_fits(
     """One small panel per laboratory line with the fitted Gaussian on top."""
     import matplotlib.pyplot as plt
 
+    from . import style as _style  # noqa: F401
+    from .style import DARK, LIGHT, PRIMARY, SECONDARY, style_axes, with_alpha
+
     lam = star[lambda_col].to_numpy()
     intensity = star["intensidad"].to_numpy()
 
     n = len(per_line)
     ncols = 3
     nrows = int(np.ceil(n / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 2.6 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.6 * ncols, 3.0 * nrows))
     axes = np.atleast_1d(axes).ravel()
 
     for ax, (_, row) in zip(axes, per_line.iterrows()):
         lam_lab = row["lambda_lab"]
         mask = (lam >= lam_lab - half_window) & (lam <= lam_lab + half_window)
-        ax.plot(lam[mask], intensity[mask], "k.", ms=3)
+        ax.scatter(lam[mask], intensity[mask],
+                   s=14, color=DARK, alpha=0.75, edgecolor="none")
         if row["ok"]:
-            xx = np.linspace(lam_lab - half_window, lam_lab + half_window, 200)
+            xx = np.linspace(lam_lab - half_window, lam_lab + half_window, 400)
             yy = _gaussian_absorption(xx, row["lambda_obs"], row["sigma"],
                                       row["depth"], row["continuum"])
-            ax.plot(xx, yy, "C3-", lw=1.2)
-            ax.axvline(row["lambda_obs"], color="C3", ls="--", lw=0.8)
+            ax.plot(xx, yy, color=PRIMARY, lw=2.2)
+            ax.fill_between(xx, yy, row["continuum"],
+                            color=with_alpha(SECONDARY, 0.25), linewidth=0)
+            ax.axvline(row["lambda_obs"], color=PRIMARY, ls="--", lw=1.0)
             ax.set_title(
-                f"{row['element']} {lam_lab:.3f}  v={row['v_kms']:+.2f} km/s",
-                fontsize=9,
+                f"{row['element']} {lam_lab:.3f}   v = {row['v_kms']:+.2f} km/s",
+                fontsize=11,
             )
         else:
-            ax.set_title(f"{row['element']} {lam_lab:.3f}  (fail)", fontsize=9)
-        ax.axvline(lam_lab, color="0.5", ls=":", lw=0.8)
-        ax.grid(alpha=0.3)
+            ax.set_title(f"{row['element']} {lam_lab:.3f}   (ajuste falló)",
+                         fontsize=11, color=DARK)
+        ax.axvline(lam_lab, color=LIGHT, ls=":", lw=1.2)
+        ax.set_xlabel("λ (Å)", fontsize=10)
+        ax.set_ylabel("I", fontsize=10)
+        style_axes(ax)
 
     for ax in axes[n:]:
         ax.set_visible(False)
 
-    fig.suptitle("Doppler fits (V / Ni / Ti)")
+    fig.suptitle("Ajustes Doppler  ·  V / Ni / Ti")
     fig.tight_layout()
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -227,19 +236,37 @@ def plot_rv_drift(results_dir: str | Path, out_path: str | Path) -> pd.DataFrame
     """Plot per-night mean radial velocity with SEM error bars."""
     import matplotlib.pyplot as plt
 
+    from . import style as _style  # noqa: F401
+    from .style import LIGHT, PRIMARY, SECONDARY, style_axes, with_alpha
+
     df = collect_rv_summaries(results_dir)
     if df.empty:
         raise RuntimeError(f"No rv.json files under {results_dir}.")
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.errorbar(df["date"], df["v_mean_kms"], yerr=df["v_sem_kms"],
-                fmt="o-", capsize=3)
-    ax.set_ylabel("v_rad (km/s)")
+    fig, ax = plt.subplots(figsize=(12, 4.6))
+    # Std band (1-sigma scatter across the 6 lines) behind the SEM bars.
+    ax.fill_between(
+        df["date"],
+        df["v_mean_kms"] - df["v_std_kms"],
+        df["v_mean_kms"] + df["v_std_kms"],
+        color=with_alpha(LIGHT, 0.55), linewidth=0,
+        label="± 1σ (dispersión entre líneas)",
+    )
+    ax.errorbar(
+        df["date"], df["v_mean_kms"], yerr=df["v_sem_kms"],
+        fmt="o-", color=PRIMARY, ecolor=PRIMARY,
+        markerfacecolor=SECONDARY, markeredgecolor=PRIMARY,
+        markeredgewidth=1.4, markersize=8, linewidth=2.0, capsize=4,
+        label="v̄ ± SEM",
+    )
+    ax.set_ylabel("v_rad  (km/s)")
     ax.set_xlabel("Fecha")
-    ax.set_title("Velocidad radial estelar por noche (V/Ni/Ti)")
-    ax.grid(alpha=0.3)
+    ax.set_title("Velocidad radial estelar por noche  ·  V / Ni / Ti")
+    ax.legend(loc="best")
+    style_axes(ax)
+    fig.autofmt_xdate()
     fig.tight_layout()
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
     return df

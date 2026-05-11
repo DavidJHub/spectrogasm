@@ -1,5 +1,6 @@
 """Wavelength calibration pipeline for echelle/grating spectroscopy."""
 
+from . import style  # noqa: F401  — installs poster-grade matplotlib defaults
 from .manifest import NIGHTS, REFERENCE_NIGHT, Night
 from .pipeline import (
     CalibrationParams,

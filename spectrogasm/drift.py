@@ -21,6 +21,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from . import style as _style  # noqa: F401
+from .style import PRIMARY, SECONDARY, style_axes
+
 
 def collect_solutions(results_dir: str | Path) -> pd.DataFrame:
     """Load every ``solution.json`` under ``results_dir`` into one DataFrame."""
@@ -71,28 +74,32 @@ def plot_drift(
 
     n_panels = len(coef_cols) + 1
     fig, axes = plt.subplots(
-        n_panels, 1, figsize=(11, 1.8 * n_panels), sharex=True
+        n_panels, 1, figsize=(12, 2.1 * n_panels), sharex=True
     )
 
     for ax, col in zip(axes[:-1], coef_cols):
-        ax.plot(df["date"], df[col], "o-")
+        ax.plot(df["date"], df[col], "o-",
+                color=PRIMARY, markerfacecolor=SECONDARY,
+                markeredgecolor=PRIMARY, markeredgewidth=1.2)
         ax.set_ylabel(col)
-        ax.grid(alpha=0.3)
+        style_axes(ax)
 
     rms_ax = axes[-1]
-    rms_ax.plot(df["date"], df["rms"], "o-", color="crimson")
-    rms_ax.set_ylabel("RMS (A)")
+    rms_ax.plot(df["date"], df["rms"], "o-",
+                color=PRIMARY, markerfacecolor=SECONDARY,
+                markeredgecolor=PRIMARY, markeredgewidth=1.2)
+    rms_ax.set_ylabel("RMS (Å)")
     rms_ax.set_xlabel("Fecha")
-    rms_ax.grid(alpha=0.3)
+    style_axes(rms_ax)
 
-    fig.suptitle("Deriva de la solucion de longitud de onda")
+    fig.suptitle("Deriva de la solución de longitud de onda")
     fig.tight_layout()
 
     if out_path is None:
         plt.show()
     else:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_path, dpi=150)
+        fig.savefig(out_path, bbox_inches="tight")
         plt.close(fig)
 
     return df

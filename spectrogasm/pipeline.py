@@ -156,8 +156,10 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
 
     # 11) Diagnostic plots.
     if params.make_plots:
-        plotting.plot_spectrum(thar, f"Th-Ar {night.date}", out_dir / "thar.png")
-        plotting.plot_spectrum(star, f"Estrella {night.date}", out_dir / "estrella.png")
+        plotting.plot_spectrum(thar, f"Th-Ar  ·  {night.date}",
+                               out_dir / "thar.png", fill=True)
+        plotting.plot_spectrum(star, f"Estrella  ·  {night.date}",
+                               out_dir / "estrella.png", fill=False)
         plotting.plot_lines_used(thar, solution.lines, out_dir / "lineas.png")
         rv_mod.plot_rv_fits(star, rv_lines, out_dir / "rv_fits.png",
                             half_window=params.rv_half_window)
