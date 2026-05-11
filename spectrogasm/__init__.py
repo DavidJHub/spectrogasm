@@ -10,11 +10,8 @@ from .pipeline import (
 )
 from .radial_velocity import (
     STELLAR_LINES,
-    CCFResult,
     RVSummary,
     measure_rv_night,
-    measure_rv_night_ccf,
-    measure_rv_night_joint,
     summarize_rv,
 )
 from .science import (
@@ -34,11 +31,8 @@ __all__ = [
     "calibrate_night",
     "calibrate_all",
     "STELLAR_LINES",
-    "CCFResult",
     "RVSummary",
     "measure_rv_night",
-    "measure_rv_night_ccf",
-    "measure_rv_night_joint",
     "summarize_rv",
     "ResolutionSummary",
     "equivalent_widths",

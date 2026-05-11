@@ -34,15 +34,12 @@ def main(argv: list[str]) -> None:
     results = calibrate_all(nights)
     print(f"\nCalibrated {len(results)} / {len(nights)} nights.")
     for r in results:
+        v_helio = r.rv_summary.v_mean_kms + r.v_bary_kms
         print(
             f"  {r.night.date}  deg={r.solution.degree}  "
             f"rms={r.solution.rms:.4f} A  v_tel={r.telluric_kms:+.3f}  "
             f"v_bary={r.v_bary_kms:+.3f}  "
-            f"v_helio  per-line={r.rv_summary.v_mean_kms + r.v_bary_kms:+.3f}"
-            f"+/-{r.rv_summary.v_sem_kms:.3f}  "
-            f"joint={r.rv_summary_joint.v_mean_kms + r.v_bary_kms:+.3f}  "
-            f"ccf={r.rv_ccf.v_kms + r.v_bary_kms:+.3f}+/-"
-            f"{r.rv_ccf.v_err_kms:.3f}  "
+            f"v_helio={v_helio:+.3f}+/-{r.rv_summary.v_sem_kms:.3f} km/s  "
             f"-> {r.out_dir}"
         )
 
@@ -53,23 +50,7 @@ def main(argv: list[str]) -> None:
 
         rv_path = RESULTS_DIR / "rv_drift.png"
         plot_rv_drift(RESULTS_DIR, rv_path)
-        print(f"Radial-velocity plot (per-line): {rv_path}")
-
-        rv_joint_path = RESULTS_DIR / "rv_drift_joint.png"
-        plot_rv_drift(
-            RESULTS_DIR, rv_joint_path,
-            filename="rv_joint.json",
-            title="Velocidad radial estelar por noche  ·  conjunto (σ compartido)",
-        )
-        print(f"Radial-velocity plot (joint):    {rv_joint_path}")
-
-        rv_ccf_path = RESULTS_DIR / "rv_drift_ccf.png"
-        plot_rv_drift(
-            RESULTS_DIR, rv_ccf_path,
-            filename="rv_ccf.json",
-            title="Velocidad radial estelar por noche  ·  CCF",
-        )
-        print(f"Radial-velocity plot (CCF):      {rv_ccf_path}")
+        print(f"Radial-velocity plot: {rv_path}")
 
 
 if __name__ == "__main__":
