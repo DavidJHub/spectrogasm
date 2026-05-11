@@ -45,6 +45,9 @@ class CalibrationResult:
     matched: pd.DataFrame
     rv_lines: pd.DataFrame
     rv_summary: rv_mod.RVSummary
+    rv_lines_joint: pd.DataFrame
+    rv_summary_joint: rv_mod.RVSummary
+    rv_joint_sigma: float
     ew: pd.DataFrame
     resolution: pd.DataFrame
     resolution_summary: science.ResolutionSummary
@@ -139,11 +142,22 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
     print(f"[{night.date}] telluric v = {v_tel:+.3f} km/s")
 
     # 8) Stellar radial velocity from V / Ni / Ti Doppler shifts.
+    # Two estimators run side-by-side so we can compare and later deprecate one.
     rv_lines = rv_mod.measure_rv_night(star, half_window=params.rv_half_window)
     rv_summary = rv_mod.summarize_rv(rv_lines)
     print(
-        f"[{night.date}] v_rad = {rv_summary.v_mean_kms:+.3f} +/- "
+        f"[{night.date}] v_rad (per-line) = {rv_summary.v_mean_kms:+.3f} +/- "
         f"{rv_summary.v_sem_kms:.3f} km/s  (n={rv_summary.n_used})"
+    )
+
+    rv_lines_joint, v_joint, sigma_joint = rv_mod.measure_rv_night_joint(
+        star, half_window=params.rv_half_window
+    )
+    rv_summary_joint = rv_mod.summarize_rv(rv_lines_joint)
+    print(
+        f"[{night.date}] v_rad (joint)    = {v_joint:+.3f} km/s  "
+        f"sigma_inst = {sigma_joint:.3f} A  "
+        f"(n={rv_summary_joint.n_used})"
     )
 
     # 9) Extra science measurements: EW, spectral R, SNR, per-element RV.
@@ -163,10 +177,15 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
     io.save_table(star, out_dir / "estrella_calibrada.csv")
     io.save_table(solution.lines, out_dir / "lineas_calibracion.csv")
     io.save_table(rv_lines, out_dir / "rv_lines.csv")
+    io.save_table(rv_lines_joint, out_dir / "rv_lines_joint.csv")
     io.save_table(ew, out_dir / "equivalent_widths.csv")
     io.save_table(res, out_dir / "resolution_per_line.csv")
     _save_solution_metadata(night, solution, v_tel, seed_origin, out_dir / "solution.json")
     _save_rv_metadata(night, rv_summary, out_dir / "rv.json")
+    _save_rv_metadata(
+        night, rv_summary_joint, out_dir / "rv_joint.json",
+        extra={"sigma_inst_A": sigma_joint, "v_joint_kms": v_joint},
+    )
     science.save_science_json(
         night.date, ew, res, res_summary, snr, per_elem,
         out_dir / "science.json",
@@ -184,8 +203,19 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         plotting.plot_spectrum(star, f"Estrella  ·  {night.date}",
                                out_dir / "estrella.png", fill=False)
         plotting.plot_lines_used(thar, solution.lines, out_dir / "lineas.png")
-        rv_mod.plot_rv_fits(star, rv_lines, out_dir / "rv_fits.png",
-                            half_window=params.rv_half_window)
+        rv_mod.plot_rv_fits(
+            star, rv_lines, out_dir / "rv_fits.png",
+            half_window=params.rv_half_window,
+            title="Ajustes Doppler · per-línea  ·  V / Ni / Ti",
+        )
+        rv_mod.plot_rv_fits(
+            star, rv_lines_joint, out_dir / "rv_fits_joint.png",
+            half_window=params.rv_half_window,
+            title=(
+                "Ajustes Doppler · conjunto (σ compartido)  ·  V / Ni / Ti  "
+                f"·  v = {v_joint:+.2f} km/s,  σ = {sigma_joint:.3f} Å"
+            ),
+        )
 
     return CalibrationResult(
         night=night,
@@ -198,6 +228,9 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         matched=matched,
         rv_lines=rv_lines,
         rv_summary=rv_summary,
+        rv_lines_joint=rv_lines_joint,
+        rv_summary_joint=rv_summary_joint,
+        rv_joint_sigma=sigma_joint,
         ew=ew,
         resolution=res,
         resolution_summary=res_summary,
@@ -261,6 +294,7 @@ def _save_rv_metadata(
     night: Night,
     summary: rv_mod.RVSummary,
     path: Path,
+    extra: dict | None = None,
 ) -> None:
     payload = {
         "date": night.date,
@@ -270,4 +304,6 @@ def _save_rv_metadata(
         "v_std_kms": summary.v_std_kms,
         "v_sem_kms": summary.v_sem_kms,
     }
+    if extra:
+        payload.update(extra)
     path.write_text(json.dumps(payload, indent=2))
