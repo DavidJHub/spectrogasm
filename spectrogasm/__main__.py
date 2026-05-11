@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import sys
 
-from .manifest import NIGHTS
+from .drift import plot_drift
+from .manifest import NIGHTS, RESULTS_DIR
 from .pipeline import calibrate_all
 
 
@@ -34,6 +35,11 @@ def main(argv: list[str]) -> None:
             f"rms={r.solution.rms:.4f} A  v_tel={r.telluric_kms:+.3f} km/s  "
             f"seed={r.seed_origin}  -> {r.out_dir}"
         )
+
+    if len(results) >= 2:
+        drift_path = RESULTS_DIR / "drift.png"
+        plot_drift(RESULTS_DIR, drift_path)
+        print(f"\nDrift plot: {drift_path}")
 
 
 if __name__ == "__main__":
