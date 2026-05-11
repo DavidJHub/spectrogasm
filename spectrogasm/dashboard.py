@@ -341,9 +341,9 @@ def fig_spectrum(spec: pd.DataFrame, title: str,
 
 
 def fig_rv_fits(night: NightData) -> go.Figure | None:
+    """One small subplot per stellar line: data + λ_lab + measured λ_obs."""
     if night.star is None or night.rv_lines.empty:
         return None
-    from .radial_velocity import _gaussian_absorption
 
     lam = night.star["lambda_rest"].to_numpy() \
         if "lambda_rest" in night.star.columns \
@@ -357,9 +357,11 @@ def fig_rv_fits(night: NightData) -> go.Figure | None:
     fig = make_subplots(
         rows=nrows, cols=ncols, horizontal_spacing=0.06, vertical_spacing=0.16,
         subplot_titles=[
-            f"{r['element']} {r['lambda_lab']:.3f}  ·  v = {r['v_kms']:+.2f} km/s"
+            f"{r['element']} {r['lambda_lab']:.3f}  ·  "
+            f"Δλ = {(r['lambda_obs'] - r['lambda_lab']):+.3f} Å  ·  "
+            f"v = {r['v_kms']:+.2f} km/s"
             if r["ok"] else
-            f"{r['element']} {r['lambda_lab']:.3f}  ·  (fallo)"
+            f"{r['element']} {r['lambda_lab']:.3f}  ·  (sin datos)"
             for _, r in night.rv_lines.iterrows()
         ],
     )
@@ -368,29 +370,34 @@ def fig_rv_fits(night: NightData) -> go.Figure | None:
         rr, cc = i // ncols + 1, i % ncols + 1
         lam_lab = row["lambda_lab"]
         mask = (lam >= lam_lab - half) & (lam <= lam_lab + half)
+        x = lam[mask]
+        y = intensity[mask]
         fig.add_trace(go.Scatter(
-            x=lam[mask], y=intensity[mask], mode="markers",
-            marker=dict(size=5, color=DARK, opacity=0.7),
-            showlegend=False, hovertemplate="λ=%{x:.3f}<br>I=%{y:.2f}<extra></extra>",
+            x=x, y=y, mode="lines+markers",
+            line=dict(color=DARK, width=1.2),
+            marker=dict(size=6, color=DARK, opacity=0.8),
+            showlegend=False,
+            hovertemplate="λ=%{x:.3f}<br>I=%{y:.2f}<extra></extra>",
         ), row=rr, col=cc)
-        if row["ok"]:
-            xx = np.linspace(lam_lab - half, lam_lab + half, 300)
-            yy = _gaussian_absorption(xx, row["lambda_obs"], row["sigma"],
-                                       row["depth"], row["continuum"])
-            fig.add_trace(go.Scatter(
-                x=xx, y=yy, mode="lines",
-                line=dict(color=PRIMARY, width=2.2),
-                fill="tonexty", fillcolor="rgba(255,106,167,0.18)",
-                showlegend=False, hoverinfo="skip",
-            ), row=rr, col=cc)
-            fig.add_vline(x=row["lambda_obs"], line=dict(color=PRIMARY, dash="dash", width=1),
+        if row["ok"] and np.isfinite(row.get("continuum", np.nan)):
+            fig.add_hline(y=row["continuum"], line=dict(color=LIGHT, dash="dot", width=1),
                           row=rr, col=cc)
-        fig.add_vline(x=lam_lab, line=dict(color=LIGHT, dash="dot", width=1.4),
+        if row["ok"]:
+            fig.add_vline(x=row["lambda_obs"],
+                          line=dict(color=PRIMARY, width=1.8),
+                          row=rr, col=cc)
+        fig.add_vline(x=lam_lab,
+                      line=dict(color=SECONDARY, dash="dash", width=1.2),
                       row=rr, col=cc)
         fig.update_xaxes(title_text="λ (Å)", row=rr, col=cc)
         fig.update_yaxes(title_text="I", row=rr, col=cc)
-    fig.update_layout(height=260 * nrows, title="Ajustes Doppler — V / Ni / Ti",
-                      showlegend=False)
+    fig.update_layout(
+        height=260 * nrows,
+        title=("Corrimientos Doppler — V / Ni / Ti  ·  "
+               "línea sólida: λ_obs (mínimo + parábola)  ·  "
+               "discontinua: λ_lab"),
+        showlegend=False,
+    )
     return fig
 
 
