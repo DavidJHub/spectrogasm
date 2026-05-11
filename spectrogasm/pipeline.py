@@ -76,15 +76,39 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
     print(f"[{night.date}] seed: {seed_origin} ({len(seed_df)} lines)")
 
     # 4) Match every peak to the atlas using the seed.
-    matched = matching.match_to_atlas(
+    matched, report = matching.match_to_atlas(
         centroids, atlas, seed_coef, tol=params.match_tol
     )
+    print(
+        f"[{night.date}] seed range: {report.lam_min:.2f} - {report.lam_max:.2f} A  "
+        f"atlas in window: {report.n_atlas_in_window}  "
+        f"nearest |diff|: {report.nearest_absdiff:.3f} A"
+    )
+
+    if matched.empty:
+        raise RuntimeError(
+            f"0 atlas lines fell within match_tol={params.match_tol} A. "
+            f"Atlas density in the seed-predicted window "
+            f"[{report.lam_min:.2f}, {report.lam_max:.2f}] = "
+            f"{report.n_atlas_in_window} lines; the closest atlas line was "
+            f"{report.nearest_absdiff:.3f} A from the nearest peak. "
+            "Either the atlas is too sparse, the seed is mis-identified, or "
+            "the wavelength range is wrong. Try CalibrationParams(match_tol=...) "
+            f">= {max(report.nearest_absdiff * 1.5, 0.5):.2f}."
+        )
+
     selected = matching.select_strong_lines(
         matched,
         n_lines=params.n_lines,
         min_separation=params.min_line_separation,
     )
     print(f"[{night.date}] matched: {len(matched)}  selected: {len(selected)}")
+
+    if len(selected) < 4:
+        raise RuntimeError(
+            f"Only {len(selected)} usable lines after selection (need >= 4). "
+            "Lower CalibrationParams.min_line_separation or relax match_tol."
+        )
 
     # 5) Final polynomial fit with iterative kappa-sigma clipping.
     solution = fitting.fit_solution(
