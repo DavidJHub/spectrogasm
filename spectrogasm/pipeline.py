@@ -13,14 +13,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import barycentric, fingerprint as fp_mod
+from . import fingerprint as fp_mod
 from . import fitting, io, matching, peaks, plotting, radial_velocity as rv_mod, science, seeds, telluric
-from .manifest import (
-    ATLAS_PATH, FINGERPRINT_PATH, RESULTS_DIR,
-    OBSERVATION_LOCAL_HOUR, OBSERVATORY_LAT_DEG, OBSERVATORY_LON_DEG,
-    TARGET_NAME, TARGET_RA_DEG, TARGET_DEC_DEG,
-    Night,
-)
+from .manifest import ATLAS_PATH, FINGERPRINT_PATH, RESULTS_DIR, Night
 
 
 @dataclass
@@ -50,7 +45,6 @@ class CalibrationResult:
     matched: pd.DataFrame
     rv_lines: pd.DataFrame
     rv_summary: rv_mod.RVSummary
-    v_bary_kms: float
     ew: pd.DataFrame
     resolution: pd.DataFrame
     resolution_summary: science.ResolutionSummary
@@ -144,30 +138,16 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
     star["lambda_rest"] = telluric.to_rest_frame(star["lambda_cal"].to_numpy(), v_tel)
     print(f"[{night.date}] telluric v = {v_tel:+.3f} km/s")
 
-    # 8) Stellar radial velocity from V / Ni / Ti Doppler shifts: per-line
-    # Gaussian fit + MAD-clipped mean, plus barycentric correction so the
-    # reported value is heliocentric (catalogue frame).
+    # 8) Stellar radial velocity from V / Ni / Ti Doppler shifts: heuristic
+    # per-line shift (argmin + parabolic refinement) on the telluric-rest
+    # spectrum, combined with a MAD-clipped mean. The reported value is
+    # the topocentric radial velocity (only the telluric correction is
+    # applied to the wavelength scale; no barycentric correction).
     rv_lines = rv_mod.measure_rv_night(star, half_window=params.rv_half_window)
     rv_summary = rv_mod.summarize_rv(rv_lines)
-    obs_time = barycentric.bogota_observation_time_utc(
-        night.date, local_hour=OBSERVATION_LOCAL_HOUR
-    )
-    v_bary = barycentric.barycentric_correction_kms(
-        obs_time,
-        target_ra_deg=TARGET_RA_DEG, target_dec_deg=TARGET_DEC_DEG,
-        obs_lat_deg=OBSERVATORY_LAT_DEG, obs_lon_deg=OBSERVATORY_LON_DEG,
-    )
     print(
-        f"[{night.date}] v_topo   = {rv_summary.v_mean_kms:+.3f} +/- "
+        f"[{night.date}] v_rad    = {rv_summary.v_mean_kms:+.3f} +/- "
         f"{rv_summary.v_sem_kms:.3f} km/s  (n={rv_summary.n_used})"
-    )
-    print(
-        f"[{night.date}] v_bary   = {v_bary:+.3f} km/s "
-        f"(target={TARGET_NAME}, obs={obs_time.isoformat()}Z)"
-    )
-    print(
-        f"[{night.date}] v_helio  = {rv_summary.v_mean_kms + v_bary:+.3f} +/- "
-        f"{rv_summary.v_sem_kms:.3f} km/s"
     )
 
     # 9) Extra science measurements: EW, spectral R, SNR, per-element RV.
@@ -190,7 +170,7 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
     io.save_table(ew, out_dir / "equivalent_widths.csv")
     io.save_table(res, out_dir / "resolution_per_line.csv")
     _save_solution_metadata(night, solution, v_tel, seed_origin, out_dir / "solution.json")
-    _save_rv_metadata(night, rv_summary, out_dir / "rv.json", v_bary=v_bary)
+    _save_rv_metadata(night, rv_summary, out_dir / "rv.json")
     science.save_science_json(
         night.date, ew, res, res_summary, snr, per_elem,
         out_dir / "science.json",
@@ -228,7 +208,6 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         matched=matched,
         rv_lines=rv_lines,
         rv_summary=rv_summary,
-        v_bary_kms=v_bary,
         ew=ew,
         resolution=res,
         resolution_summary=res_summary,
@@ -292,18 +271,15 @@ def _save_rv_metadata(
     night: Night,
     summary: rv_mod.RVSummary,
     path: Path,
-    v_bary: float = 0.0,
 ) -> None:
     payload = {
         "date": night.date,
         "n_used": summary.n_used,
-        # Heliocentric (catalogue frame). Topocentric is preserved below.
-        "v_mean_kms": summary.v_mean_kms + v_bary,
-        "v_median_kms": summary.v_median_kms + v_bary,
+        # Topocentric radial velocity (telluric correction applied to the
+        # wavelength scale; no barycentric correction).
+        "v_mean_kms": summary.v_mean_kms,
+        "v_median_kms": summary.v_median_kms,
         "v_std_kms": summary.v_std_kms,
         "v_sem_kms": summary.v_sem_kms,
-        "v_bary_kms": v_bary,
-        "v_mean_topo_kms": summary.v_mean_kms,
-        "v_median_topo_kms": summary.v_median_kms,
     }
     path.write_text(json.dumps(payload, indent=2))

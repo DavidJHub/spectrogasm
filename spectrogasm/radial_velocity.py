@@ -8,9 +8,11 @@ radial velocity::
 
     v = c * (lambda_obs - lambda_lab) / lambda_lab
 
-To get heliocentric velocity, ``spectrogasm.barycentric`` adds the
-projection of Earth's velocity in the barycentric frame onto the line
-of sight to the target.
+The reported value is therefore the *topocentric* radial velocity: the
+only frame transformation applied to the wavelength scale is the
+telluric correction. A barycentric correction module exists in
+``spectrogasm.barycentric`` for callers who want heliocentric values,
+but the pipeline does not apply it by default.
 
 **Estimator (heuristic, not a model fit).** For each laboratory line
 we take the deepest pixel within ``±half_window`` of ``lambda_lab``
@@ -381,7 +383,7 @@ def plot_rv_drift(
     results_dir: str | Path,
     out_path: str | Path,
     filename: str = "rv.json",
-    title: str = "Velocidad radial heliocéntrica por noche  ·  V / Ni / Ti",
+    title: str = "Velocidad radial por noche  ·  V / Ni / Ti",
 ) -> pd.DataFrame:
     """Plot per-night mean radial velocity with SEM error bars."""
     import matplotlib.pyplot as plt
@@ -408,7 +410,7 @@ def plot_rv_drift(
         markeredgewidth=1.4, markersize=8, linewidth=2.0, capsize=4,
         label="v̄ ± SEM",
     )
-    ax.set_ylabel("v_rad  (km/s, heliocéntrico)")
+    ax.set_ylabel("v_rad  (km/s)")
     ax.set_xlabel("Fecha")
     ax.set_title(title)
     ax.legend(loc="best")

@@ -34,12 +34,11 @@ def main(argv: list[str]) -> None:
     results = calibrate_all(nights)
     print(f"\nCalibrated {len(results)} / {len(nights)} nights.")
     for r in results:
-        v_helio = r.rv_summary.v_mean_kms + r.v_bary_kms
         print(
             f"  {r.night.date}  deg={r.solution.degree}  "
             f"rms={r.solution.rms:.4f} A  v_tel={r.telluric_kms:+.3f}  "
-            f"v_bary={r.v_bary_kms:+.3f}  "
-            f"v_helio={v_helio:+.3f}+/-{r.rv_summary.v_sem_kms:.3f} km/s  "
+            f"v_rad={r.rv_summary.v_mean_kms:+.3f}"
+            f"+/-{r.rv_summary.v_sem_kms:.3f} km/s  "
             f"-> {r.out_dir}"
         )
 
