@@ -36,13 +36,14 @@ def main(argv: list[str]) -> None:
     for r in results:
         print(
             f"  {r.night.date}  deg={r.solution.degree}  "
-            f"rms={r.solution.rms:.4f} A  v_tel={r.telluric_kms:+.3f} km/s  "
-            f"v(per-line)={r.rv_summary.v_mean_kms:+.3f}"
+            f"rms={r.solution.rms:.4f} A  v_tel={r.telluric_kms:+.3f}  "
+            f"v_bary={r.v_bary_kms:+.3f}  "
+            f"v_helio  per-line={r.rv_summary.v_mean_kms + r.v_bary_kms:+.3f}"
             f"+/-{r.rv_summary.v_sem_kms:.3f}  "
-            f"v(joint)={r.rv_summary_joint.v_mean_kms:+.3f}  "
-            f"v(ccf)={r.rv_ccf.v_kms:+.3f}+/-"
+            f"joint={r.rv_summary_joint.v_mean_kms + r.v_bary_kms:+.3f}  "
+            f"ccf={r.rv_ccf.v_kms + r.v_bary_kms:+.3f}+/-"
             f"{r.rv_ccf.v_err_kms:.3f}  "
-            f"seed={r.seed_origin}  -> {r.out_dir}"
+            f"-> {r.out_dir}"
         )
 
     if len(results) >= 2:
