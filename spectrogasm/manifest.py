@@ -1,16 +1,22 @@
-"""Hardcoded inventory of observing nights and per-night metadata.
+"""Inventory of observing nights, auto-discovered from ``data/``.
 
-Adding a new night is just a matter of appending a ``Night`` entry to
-``NIGHTS`` and dropping its ``.dat`` files in ``data/``. If a manual seed
-file does not exist for the new night, the pipeline falls back to the
-fingerprint-based seed bootstrapped from ``REFERENCE_NIGHT``.
+Naming convention for each night's spectra::
 
-Telluric radial velocities (km/s) come from the night log; they shift the
-calibrated wavelengths back to the rest frame.
+    data/estrella_YY-MM-DD.dat
+    data/thar_YY-MM-DD.dat
+
+Two-digit years are mapped to the 21st century (``YY`` -> ``20YY``). The
+atlas ``data/thar_uves.dat`` is shared across all nights and is therefore
+excluded from the per-night discovery.
+
+A night gets a manual seed if a matching ``seeds/YY-MM-DD.json`` file
+exists; otherwise the pipeline falls back to the fingerprint bootstrap
+from the reference night.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +28,12 @@ RESULTS_DIR = ROOT / "results"
 
 ATLAS_PATH = DATA_DIR / "thar_uves.dat"
 FINGERPRINT_PATH = ROOT / "fingerprint.json"
+
+# The reference night supplies the manual seed and the fingerprint template
+# every other night is bootstrapped from.
+REFERENCE_DATE = "2024-03-12"
+
+_DATE_RE = re.compile(r"^estrella_(\d{2}-\d{2}-\d{2})\.dat$")
 
 
 @dataclass(frozen=True)
@@ -52,25 +64,51 @@ TELLURIC_KMS: dict[str, float] = {
 }
 
 
-# The reference night is the one whose seed lines were measured by hand and
-# whose lamp spectrum becomes the fingerprint template for every other night.
-REFERENCE_NIGHT = Night(
-    date="2024-03-12",
-    star_file=DATA_DIR / "estrella_marzo12.dat",
-    thar_file=DATA_DIR / "thor_marzo12.dat",
-    seed_file=SEED_DIR / "marzo12.json",
-)
+def _iso_from_short(short: str) -> str:
+    """Convert ``YY-MM-DD`` to ``20YY-MM-DD``."""
+    yy, mm, dd = short.split("-")
+    return f"20{yy}-{mm}-{dd}"
 
 
-# Full batch. New nights without a hand-built seed get ``seed_file=None`` and
-# the pipeline will bootstrap them from the fingerprint.
-NIGHTS: list[Night] = [
-    REFERENCE_NIGHT,
-    # Example of a future night (no data on disk yet, here only as a template):
-    # Night(
-    #     date="2024-03-19",
-    #     star_file=DATA_DIR / "estrella_marzo19.dat",
-    #     thar_file=DATA_DIR / "thor_marzo19.dat",
-    #     seed_file=None,
-    # ),
-]
+def discover_nights(
+    data_dir: Path = DATA_DIR,
+    seed_dir: Path = SEED_DIR,
+) -> list[Night]:
+    """Scan ``data_dir`` for ``estrella_YY-MM-DD.dat`` / ``thar_YY-MM-DD.dat``
+    pairs and return one :class:`Night` per matched date.
+
+    A star file without a matching Th-Ar (or vice versa) is skipped silently;
+    the atlas ``thar_uves.dat`` is excluded by the strict ``YY-MM-DD`` regex.
+    """
+    nights: list[Night] = []
+    for star_path in sorted(data_dir.glob("estrella_*.dat")):
+        match = _DATE_RE.match(star_path.name)
+        if match is None:
+            continue
+        short = match.group(1)
+        thar_path = data_dir / f"thar_{short}.dat"
+        if not thar_path.exists():
+            continue
+        seed_path = seed_dir / f"{short}.json"
+        nights.append(
+            Night(
+                date=_iso_from_short(short),
+                star_file=star_path,
+                thar_file=thar_path,
+                seed_file=seed_path if seed_path.exists() else None,
+            )
+        )
+    return nights
+
+
+NIGHTS: list[Night] = discover_nights()
+
+
+def _find_reference(nights: list[Night]) -> Night | None:
+    for n in nights:
+        if n.date == REFERENCE_DATE and n.seed_file is not None:
+            return n
+    return None
+
+
+REFERENCE_NIGHT: Night | None = _find_reference(NIGHTS)

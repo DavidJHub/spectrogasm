@@ -15,6 +15,7 @@ from spectrogasm.manifest import ATLAS_PATH
 def _data_present() -> bool:
     return (
         ATLAS_PATH.exists()
+        and REFERENCE_NIGHT is not None
         and REFERENCE_NIGHT.star_file.exists()
         and REFERENCE_NIGHT.thar_file.exists()
         and REFERENCE_NIGHT.seed_file is not None
