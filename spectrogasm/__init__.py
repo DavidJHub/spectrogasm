@@ -14,6 +14,13 @@ from .radial_velocity import (
     measure_rv_night,
     summarize_rv,
 )
+from .science import (
+    ResolutionSummary,
+    equivalent_widths,
+    estimate_snr,
+    per_element_rv,
+    spectral_resolution,
+)
 
 __all__ = [
     "NIGHTS",
@@ -27,4 +34,9 @@ __all__ = [
     "RVSummary",
     "measure_rv_night",
     "summarize_rv",
+    "ResolutionSummary",
+    "equivalent_widths",
+    "estimate_snr",
+    "per_element_rv",
+    "spectral_resolution",
 ]
