@@ -13,9 +13,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import fingerprint as fp_mod
+from . import barycentric, fingerprint as fp_mod
 from . import fitting, io, matching, peaks, plotting, radial_velocity as rv_mod, science, seeds, telluric
-from .manifest import ATLAS_PATH, FINGERPRINT_PATH, RESULTS_DIR, Night
+from .manifest import (
+    ATLAS_PATH, FINGERPRINT_PATH, RESULTS_DIR,
+    OBSERVATION_LOCAL_HOUR, OBSERVATORY_LAT_DEG, OBSERVATORY_LON_DEG,
+    TARGET_NAME, TARGET_RA_DEG, TARGET_DEC_DEG,
+    Night,
+)
 
 
 @dataclass
@@ -49,6 +54,7 @@ class CalibrationResult:
     rv_summary_joint: rv_mod.RVSummary
     rv_joint_sigma: float
     rv_ccf: rv_mod.CCFResult
+    v_bary_kms: float
     ew: pd.DataFrame
     resolution: pd.DataFrame
     resolution_summary: science.ResolutionSummary
@@ -168,6 +174,26 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         f"contrast = {rv_ccf.contrast:.3f}  (n_lines={rv_ccf.n_lines_used})"
     )
 
+    # Barycentric correction: v_helio = v_topo + v_bary. Same value for all
+    # three estimators since they share the same observation epoch.
+    obs_time = barycentric.bogota_observation_time_utc(
+        night.date, local_hour=OBSERVATION_LOCAL_HOUR
+    )
+    v_bary = barycentric.barycentric_correction_kms(
+        obs_time,
+        target_ra_deg=TARGET_RA_DEG, target_dec_deg=TARGET_DEC_DEG,
+        obs_lat_deg=OBSERVATORY_LAT_DEG, obs_lon_deg=OBSERVATORY_LON_DEG,
+    )
+    print(
+        f"[{night.date}] v_bary           = {v_bary:+.3f} km/s "
+        f"(target={TARGET_NAME}, obs={obs_time.isoformat()}Z)"
+    )
+    print(
+        f"[{night.date}] v_helio  per-line={rv_summary.v_mean_kms + v_bary:+.3f}  "
+        f"joint={v_joint + v_bary:+.3f}  "
+        f"ccf={rv_ccf.v_kms + v_bary:+.3f}  km/s"
+    )
+
     # 9) Extra science measurements: EW, spectral R, SNR, per-element RV.
     ew = science.equivalent_widths(rv_lines)
     res = science.spectral_resolution(thar, solution.lines)
@@ -189,12 +215,15 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
     io.save_table(ew, out_dir / "equivalent_widths.csv")
     io.save_table(res, out_dir / "resolution_per_line.csv")
     _save_solution_metadata(night, solution, v_tel, seed_origin, out_dir / "solution.json")
-    _save_rv_metadata(night, rv_summary, out_dir / "rv.json")
     _save_rv_metadata(
-        night, rv_summary_joint, out_dir / "rv_joint.json",
-        extra={"sigma_inst_A": sigma_joint, "v_joint_kms": v_joint},
+        night, rv_summary, out_dir / "rv.json", v_bary=v_bary,
     )
-    _save_ccf_metadata(night, rv_ccf, out_dir / "rv_ccf.json")
+    _save_rv_metadata(
+        night, rv_summary_joint, out_dir / "rv_joint.json", v_bary=v_bary,
+        extra={"sigma_inst_A": sigma_joint, "v_joint_kms": v_joint,
+               "v_joint_helio_kms": v_joint + v_bary},
+    )
+    _save_ccf_metadata(night, rv_ccf, out_dir / "rv_ccf.json", v_bary=v_bary)
     science.save_science_json(
         night.date, ew, res, res_summary, snr, per_elem,
         out_dir / "science.json",
@@ -246,6 +275,7 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         rv_summary_joint=rv_summary_joint,
         rv_joint_sigma=sigma_joint,
         rv_ccf=rv_ccf,
+        v_bary_kms=v_bary,
         ew=ew,
         resolution=res,
         resolution_summary=res_summary,
@@ -305,7 +335,9 @@ def _save_solution_metadata(
     path.write_text(json.dumps(payload, indent=2))
 
 
-def _save_ccf_metadata(night: Night, ccf: rv_mod.CCFResult, path: Path) -> None:
+def _save_ccf_metadata(
+    night: Night, ccf: rv_mod.CCFResult, path: Path, v_bary: float = 0.0
+) -> None:
     payload = {
         "date": night.date,
         "v_kms": ccf.v_kms,
@@ -313,9 +345,12 @@ def _save_ccf_metadata(night: Night, ccf: rv_mod.CCFResult, path: Path) -> None:
         "fwhm_kms": ccf.fwhm_kms,
         "contrast": ccf.contrast,
         "n_lines_used": ccf.n_lines_used,
-        # CCF rv_drift consumer expects these summary fields too:
-        "v_mean_kms": ccf.v_kms,
-        "v_median_kms": ccf.v_kms,
+        "v_bary_kms": v_bary,
+        "v_helio_kms": ccf.v_kms + v_bary,
+        # rv_drift consumer expects these summary fields too. Use heliocentric
+        # so the across-night drift plot lives in the catalogue frame.
+        "v_mean_kms": ccf.v_kms + v_bary,
+        "v_median_kms": ccf.v_kms + v_bary,
         "v_std_kms": ccf.v_err_kms if ccf.v_err_kms == ccf.v_err_kms else 0.0,
         "v_sem_kms": ccf.v_err_kms if ccf.v_err_kms == ccf.v_err_kms else 0.0,
         "n_used": ccf.n_lines_used,
@@ -327,15 +362,20 @@ def _save_rv_metadata(
     night: Night,
     summary: rv_mod.RVSummary,
     path: Path,
+    v_bary: float = 0.0,
     extra: dict | None = None,
 ) -> None:
     payload = {
         "date": night.date,
         "n_used": summary.n_used,
-        "v_mean_kms": summary.v_mean_kms,
-        "v_median_kms": summary.v_median_kms,
+        # Heliocentric (catalogue frame). Topocentric is preserved below.
+        "v_mean_kms": summary.v_mean_kms + v_bary,
+        "v_median_kms": summary.v_median_kms + v_bary,
         "v_std_kms": summary.v_std_kms,
         "v_sem_kms": summary.v_sem_kms,
+        "v_bary_kms": v_bary,
+        "v_mean_topo_kms": summary.v_mean_kms,
+        "v_median_topo_kms": summary.v_median_kms,
     }
     if extra:
         payload.update(extra)

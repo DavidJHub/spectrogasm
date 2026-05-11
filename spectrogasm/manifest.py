@@ -64,6 +64,29 @@ TELLURIC_KMS: dict[str, float] = {
 }
 
 
+# --- Target & observatory metadata ----------------------------------------
+#
+# All nights observe the same star from the same site, so these are global
+# constants rather than per-night fields. Used by the barycentric correction
+# in ``barycentric.py`` to convert the topocentric v_rad into heliocentric.
+
+# HD 49331 (M1 III), SIMBAD ICRS J2000.
+TARGET_NAME = "HD 49331"
+TARGET_RA_DEG = 101.9055
+TARGET_DEC_DEG = -16.8457
+
+# Universidad de los Andes, Bogotá (UTC-5, no DST).
+OBSERVATORY_NAME = "Universidad de los Andes, Bogotá"
+OBSERVATORY_LAT_DEG = 4.602
+OBSERVATORY_LON_DEG = -74.066
+OBSERVATORY_ALT_M = 2625.0
+
+# Approximate local hour at which exposures were taken. The exact DATE-OBS
+# from the FITS headers is not in the dataset; using ~19:00 local
+# introduces < 0.5 km/s of error in v_bary, well below the per-line scatter.
+OBSERVATION_LOCAL_HOUR = 19
+
+
 def _iso_from_short(short: str) -> str:
     """Convert ``YY-MM-DD`` to ``20YY-MM-DD``."""
     yy, mm, dd = short.split("-")
