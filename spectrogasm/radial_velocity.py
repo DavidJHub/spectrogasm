@@ -348,7 +348,211 @@ def summarize_rv(per_line: pd.DataFrame, mad_kappa: float = 3.0) -> RVSummary:
     )
 
 
-# --- Plot ------------------------------------------------------------------
+# --- Cross-correlation method ---------------------------------------------
+
+@dataclass
+class CCFResult:
+    v_axis: np.ndarray
+    ccf: np.ndarray
+    v_kms: float
+    v_err_kms: float
+    fwhm_kms: float
+    contrast: float
+    n_lines_used: int
+
+
+def measure_rv_night_ccf(
+    star: pd.DataFrame,
+    lines: list[tuple[str, float]] = STELLAR_LINES,
+    half_window: float = 2.0,
+    lambda_col: str = "lambda_rest",
+    v_min_kms: float = -80.0,
+    v_max_kms: float = 80.0,
+    v_step_kms: float = 0.25,
+    core_half: float = 0.45,
+    percentile: float = 80.0,
+) -> CCFResult:
+    """Cross-correlate the spectrum against a per-line line-by-line mask.
+
+    For each line we estimate a local continuum from the wings, compute
+    the absorption residual ``r(λ) = 1 − I/cont`` (positive in absorption),
+    and sum ``r`` evaluated at the Doppler-shifted line positions over a
+    grid of trial velocities. The peak of that sum is the night's v_kms;
+    a parabolic fit to the three points around the peak gives sub-step
+    precision and a curvature-based uncertainty.
+
+    Coadds the signal of all lines coherently, so weak / absent lines
+    don't bias the result — they just contribute noise.
+    """
+    lam_all = star[lambda_col].to_numpy()
+    int_all = star["intensidad"].to_numpy()
+
+    segments: list[tuple[float, np.ndarray, np.ndarray]] = []
+    for _, lam_lab in lines:
+        mask = (lam_all >= lam_lab - half_window) & (lam_all <= lam_lab + half_window)
+        x = lam_all[mask]
+        y = int_all[mask]
+        if x.size < 5:
+            continue
+        cont = _wing_continuum(x, y, mu=lam_lab, core_half=core_half, percentile=percentile)
+        if cont <= 0:
+            continue
+        r = 1.0 - y / cont
+        segments.append((lam_lab, x, r))
+
+    v_axis = np.arange(v_min_kms, v_max_kms + v_step_kms, v_step_kms)
+
+    if not segments:
+        return CCFResult(
+            v_axis=v_axis, ccf=np.zeros_like(v_axis),
+            v_kms=float("nan"), v_err_kms=float("nan"),
+            fwhm_kms=float("nan"), contrast=float("nan"),
+            n_lines_used=0,
+        )
+
+    ccf = np.zeros_like(v_axis)
+    for j, v in enumerate(v_axis):
+        s = 0.0
+        shift = 1.0 + v / C_KMS
+        for lam_lab, x, r in segments:
+            s += float(np.interp(lam_lab * shift, x, r, left=0.0, right=0.0))
+        ccf[j] = s
+
+    i_max = int(np.argmax(ccf))
+    v_peak = float(v_axis[i_max])
+    v_err = float("nan")
+    fwhm_kms = float("nan")
+
+    if 1 <= i_max <= ccf.size - 2:
+        y0, y1, y2 = float(ccf[i_max - 1]), float(ccf[i_max]), float(ccf[i_max + 1])
+        denom = y0 - 2.0 * y1 + y2
+        if denom < 0:  # concave down, true maximum
+            offset = 0.5 * (y0 - y2) / denom
+            v_peak = float(v_axis[i_max] + offset * v_step_kms)
+            # Robust noise estimator from the CCF wings (|v - v_peak| > 30 km/s).
+            far = np.abs(v_axis - v_peak) > 30.0
+            if far.sum() >= 10:
+                noise = 1.4826 * float(np.median(np.abs(ccf[far] - np.median(ccf[far]))))
+            else:
+                noise = float(np.std(ccf))
+            curvature = -denom / (v_step_kms ** 2)  # > 0 at a maximum
+            if curvature > 0 and noise > 0:
+                v_err = float(noise / np.sqrt(curvature) / max(y1, 1e-12))
+                # Approx Gaussian-like FWHM from curvature.
+                fwhm_kms = float(2.0 * np.sqrt(2.0 * np.log(2.0)) * np.sqrt(y1 / curvature))
+
+    baseline = float(np.median(ccf))
+    contrast = float((ccf[i_max] - baseline) / baseline) if baseline > 0 else float("nan")
+
+    return CCFResult(
+        v_axis=v_axis, ccf=ccf,
+        v_kms=v_peak, v_err_kms=v_err,
+        fwhm_kms=fwhm_kms, contrast=contrast,
+        n_lines_used=len(segments),
+    )
+
+
+def plot_rv_ccf(
+    ccf: CCFResult, out_path: str | Path,
+    title: str = "CCF estelar  ·  V / Ni / Ti",
+) -> None:
+    """Plot the cross-correlation function with its peak marked."""
+    import matplotlib.pyplot as plt
+
+    from . import style as _style  # noqa: F401
+    from .style import LIGHT, PRIMARY, SECONDARY, style_axes, with_alpha
+
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    ax.plot(ccf.v_axis, ccf.ccf, color=PRIMARY, lw=2.0)
+    ax.fill_between(ccf.v_axis, ccf.ccf, np.median(ccf.ccf),
+                    where=ccf.ccf >= np.median(ccf.ccf),
+                    color=with_alpha(SECONDARY, 0.25), linewidth=0)
+    if np.isfinite(ccf.v_kms):
+        ax.axvline(ccf.v_kms, color=PRIMARY, ls="--", lw=1.4,
+                   label=f"v = {ccf.v_kms:+.2f} km/s")
+    ax.axvline(0.0, color=LIGHT, ls=":", lw=1.0)
+    ax.set_xlabel("v  (km/s)")
+    ax.set_ylabel("CCF  (Σ residuos en absorción)")
+    err_str = f"±{ccf.v_err_kms:.2f}" if np.isfinite(ccf.v_err_kms) else "—"
+    fwhm_str = f"{ccf.fwhm_kms:.1f}" if np.isfinite(ccf.fwhm_kms) else "—"
+    ax.set_title(
+        f"{title}   ·   v = {ccf.v_kms:+.2f} {err_str} km/s   "
+        f"FWHM = {fwhm_str} km/s   ·   {ccf.n_lines_used} líneas"
+    )
+    ax.legend(loc="best")
+    style_axes(ax)
+    fig.tight_layout()
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --- Diagnostic plot: spectrum context around each line -------------------
+
+def plot_rv_diagnostic(
+    star: pd.DataFrame,
+    out_path: str | Path,
+    lines: list[tuple[str, float]] = STELLAR_LINES,
+    context_half: float = 5.0,
+    fit_half: float = 2.0,
+    lambda_col: str = "lambda_rest",
+    title: str = "Diagnóstico  ·  contexto de cada línea estelar",
+) -> None:
+    """One panel per line showing a *wider* spectral context.
+
+    Marks the laboratory wavelength (solid), the fit window (shaded), and
+    a robust local continuum (horizontal). Helps decide visually whether
+    each line is actually present at the expected position.
+    """
+    import matplotlib.pyplot as plt
+
+    from . import style as _style  # noqa: F401
+    from .style import DARK, LIGHT, PRIMARY, SECONDARY, style_axes, with_alpha
+
+    lam = star[lambda_col].to_numpy()
+    intensity = star["intensidad"].to_numpy()
+
+    n = len(lines)
+    ncols = 3
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5.0 * ncols, 3.2 * nrows))
+    axes = np.atleast_1d(axes).ravel()
+
+    for ax, (element, lam_lab) in zip(axes, lines):
+        mask = (lam >= lam_lab - context_half) & (lam <= lam_lab + context_half)
+        x = lam[mask]
+        y = intensity[mask]
+        ax.plot(x, y, color=DARK, lw=1.0, alpha=0.65)
+        ax.scatter(x, y, s=14, color=DARK, alpha=0.85, edgecolor="none")
+
+        ax.axvspan(lam_lab - fit_half, lam_lab + fit_half,
+                   color=with_alpha(SECONDARY, 0.18), linewidth=0,
+                   label="ventana de ajuste")
+        ax.axvline(lam_lab, color=PRIMARY, ls="--", lw=1.6,
+                   label=f"λ_lab = {lam_lab:.3f}")
+
+        if x.size >= 5:
+            cont = _wing_continuum(x, y, mu=lam_lab, core_half=0.45, percentile=80.0)
+            ax.axhline(cont, color=LIGHT, ls=":", lw=1.4,
+                       label=f"continuo ≈ {cont:,.0f}")
+
+        ax.set_title(f"{element}  {lam_lab:.3f} Å", fontsize=11)
+        ax.set_xlabel("λ (Å)", fontsize=10)
+        ax.set_ylabel("I", fontsize=10)
+        ax.legend(loc="best", fontsize=8, framealpha=0.85)
+        style_axes(ax)
+
+    for ax in axes[n:]:
+        ax.set_visible(False)
+
+    fig.suptitle(title)
+    fig.tight_layout()
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --- Per-line fit panel plot ----------------------------------------------
 
 def plot_rv_fits(
     star: pd.DataFrame,

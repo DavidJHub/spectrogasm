@@ -37,9 +37,11 @@ def main(argv: list[str]) -> None:
         print(
             f"  {r.night.date}  deg={r.solution.degree}  "
             f"rms={r.solution.rms:.4f} A  v_tel={r.telluric_kms:+.3f} km/s  "
-            f"v_rad(per-line)={r.rv_summary.v_mean_kms:+.3f}"
+            f"v(per-line)={r.rv_summary.v_mean_kms:+.3f}"
             f"+/-{r.rv_summary.v_sem_kms:.3f}  "
-            f"v_rad(joint)={r.rv_summary_joint.v_mean_kms:+.3f}  "
+            f"v(joint)={r.rv_summary_joint.v_mean_kms:+.3f}  "
+            f"v(ccf)={r.rv_ccf.v_kms:+.3f}+/-"
+            f"{r.rv_ccf.v_err_kms:.3f}  "
             f"seed={r.seed_origin}  -> {r.out_dir}"
         )
 
@@ -59,6 +61,14 @@ def main(argv: list[str]) -> None:
             title="Velocidad radial estelar por noche  ·  conjunto (σ compartido)",
         )
         print(f"Radial-velocity plot (joint):    {rv_joint_path}")
+
+        rv_ccf_path = RESULTS_DIR / "rv_drift_ccf.png"
+        plot_rv_drift(
+            RESULTS_DIR, rv_ccf_path,
+            filename="rv_ccf.json",
+            title="Velocidad radial estelar por noche  ·  CCF",
+        )
+        print(f"Radial-velocity plot (CCF):      {rv_ccf_path}")
 
 
 if __name__ == "__main__":

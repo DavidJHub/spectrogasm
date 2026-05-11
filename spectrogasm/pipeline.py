@@ -48,6 +48,7 @@ class CalibrationResult:
     rv_lines_joint: pd.DataFrame
     rv_summary_joint: rv_mod.RVSummary
     rv_joint_sigma: float
+    rv_ccf: rv_mod.CCFResult
     ew: pd.DataFrame
     resolution: pd.DataFrame
     resolution_summary: science.ResolutionSummary
@@ -160,6 +161,13 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         f"(n={rv_summary_joint.n_used})"
     )
 
+    rv_ccf = rv_mod.measure_rv_night_ccf(star, half_window=params.rv_half_window)
+    err_str = f"+/- {rv_ccf.v_err_kms:.3f}" if rv_ccf.v_err_kms == rv_ccf.v_err_kms else "+/- nan"
+    print(
+        f"[{night.date}] v_rad (ccf)      = {rv_ccf.v_kms:+.3f} {err_str} km/s  "
+        f"contrast = {rv_ccf.contrast:.3f}  (n_lines={rv_ccf.n_lines_used})"
+    )
+
     # 9) Extra science measurements: EW, spectral R, SNR, per-element RV.
     ew = science.equivalent_widths(rv_lines)
     res = science.spectral_resolution(thar, solution.lines)
@@ -186,6 +194,7 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         night, rv_summary_joint, out_dir / "rv_joint.json",
         extra={"sigma_inst_A": sigma_joint, "v_joint_kms": v_joint},
     )
+    _save_ccf_metadata(night, rv_ccf, out_dir / "rv_ccf.json")
     science.save_science_json(
         night.date, ew, res, res_summary, snr, per_elem,
         out_dir / "science.json",
@@ -216,6 +225,11 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
                 f"·  v = {v_joint:+.2f} km/s,  σ = {sigma_joint:.3f} Å"
             ),
         )
+        rv_mod.plot_rv_ccf(rv_ccf, out_dir / "rv_ccf.png")
+        rv_mod.plot_rv_diagnostic(
+            star, out_dir / "rv_diagnostic.png",
+            fit_half=params.rv_half_window,
+        )
 
     return CalibrationResult(
         night=night,
@@ -231,6 +245,7 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         rv_lines_joint=rv_lines_joint,
         rv_summary_joint=rv_summary_joint,
         rv_joint_sigma=sigma_joint,
+        rv_ccf=rv_ccf,
         ew=ew,
         resolution=res,
         resolution_summary=res_summary,
@@ -286,6 +301,24 @@ def _save_solution_metadata(
         "n_lines": int(len(solution.lines)),
         "telluric_kms": v_tel,
         "seed_origin": seed_origin,
+    }
+    path.write_text(json.dumps(payload, indent=2))
+
+
+def _save_ccf_metadata(night: Night, ccf: rv_mod.CCFResult, path: Path) -> None:
+    payload = {
+        "date": night.date,
+        "v_kms": ccf.v_kms,
+        "v_err_kms": ccf.v_err_kms,
+        "fwhm_kms": ccf.fwhm_kms,
+        "contrast": ccf.contrast,
+        "n_lines_used": ccf.n_lines_used,
+        # CCF rv_drift consumer expects these summary fields too:
+        "v_mean_kms": ccf.v_kms,
+        "v_median_kms": ccf.v_kms,
+        "v_std_kms": ccf.v_err_kms if ccf.v_err_kms == ccf.v_err_kms else 0.0,
+        "v_sem_kms": ccf.v_err_kms if ccf.v_err_kms == ccf.v_err_kms else 0.0,
+        "n_used": ccf.n_lines_used,
     }
     path.write_text(json.dumps(payload, indent=2))
 
