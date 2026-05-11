@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import fingerprint as fp_mod
-from . import fitting, io, matching, peaks, plotting, seeds, telluric
+from . import fitting, io, matching, peaks, plotting, radial_velocity as rv_mod, seeds, telluric
 from .manifest import ATLAS_PATH, FINGERPRINT_PATH, RESULTS_DIR, Night
 
 
@@ -29,6 +29,7 @@ class CalibrationParams:
     min_line_separation: float = 8.0
     sigma_clip_kappa: float = 3.0
     sigma_clip_max_iter: int = 10
+    rv_half_window: float = 2.0
     make_plots: bool = True
 
 
@@ -42,6 +43,8 @@ class CalibrationResult:
     seed: pd.DataFrame
     seed_origin: str  # "manual" or "fingerprint"
     matched: pd.DataFrame
+    rv_lines: pd.DataFrame
+    rv_summary: rv_mod.RVSummary
     out_dir: Path
 
 
@@ -130,22 +133,34 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
     star["lambda_rest"] = telluric.to_rest_frame(star["lambda_cal"].to_numpy(), v_tel)
     print(f"[{night.date}] telluric v = {v_tel:+.3f} km/s")
 
-    # 8) Persist artifacts.
+    # 8) Stellar radial velocity from V / Ni / Ti Doppler shifts.
+    rv_lines = rv_mod.measure_rv_night(star, half_window=params.rv_half_window)
+    rv_summary = rv_mod.summarize_rv(rv_lines)
+    print(
+        f"[{night.date}] v_rad = {rv_summary.v_mean_kms:+.3f} +/- "
+        f"{rv_summary.v_sem_kms:.3f} km/s  (n={rv_summary.n_used})"
+    )
+
+    # 9) Persist artifacts.
     io.save_table(thar, out_dir / "thar_calibrado.csv")
     io.save_table(star, out_dir / "estrella_calibrada.csv")
     io.save_table(solution.lines, out_dir / "lineas_calibracion.csv")
+    io.save_table(rv_lines, out_dir / "rv_lines.csv")
     _save_solution_metadata(night, solution, v_tel, seed_origin, out_dir / "solution.json")
+    _save_rv_metadata(night, rv_summary, out_dir / "rv.json")
 
-    # 9) If this is the reference (manual) night, refresh the fingerprint.
+    # 10) If this is the reference (manual) night, refresh the fingerprint.
     if seed_origin == "manual":
         fp_mod.save_fingerprint(thar, solution.lines, FINGERPRINT_PATH)
         print(f"[{night.date}] fingerprint refreshed -> {FINGERPRINT_PATH}")
 
-    # 10) Diagnostic plots.
+    # 11) Diagnostic plots.
     if params.make_plots:
         plotting.plot_spectrum(thar, f"Th-Ar {night.date}", out_dir / "thar.png")
         plotting.plot_spectrum(star, f"Estrella {night.date}", out_dir / "estrella.png")
         plotting.plot_lines_used(thar, solution.lines, out_dir / "lineas.png")
+        rv_mod.plot_rv_fits(star, rv_lines, out_dir / "rv_fits.png",
+                            half_window=params.rv_half_window)
 
     return CalibrationResult(
         night=night,
@@ -156,6 +171,8 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         seed=seed_df,
         seed_origin=seed_origin,
         matched=matched,
+        rv_lines=rv_lines,
+        rv_summary=rv_summary,
         out_dir=out_dir,
     )
 
@@ -206,5 +223,21 @@ def _save_solution_metadata(
         "n_lines": int(len(solution.lines)),
         "telluric_kms": v_tel,
         "seed_origin": seed_origin,
+    }
+    path.write_text(json.dumps(payload, indent=2))
+
+
+def _save_rv_metadata(
+    night: Night,
+    summary: rv_mod.RVSummary,
+    path: Path,
+) -> None:
+    payload = {
+        "date": night.date,
+        "n_used": summary.n_used,
+        "v_mean_kms": summary.v_mean_kms,
+        "v_median_kms": summary.v_median_kms,
+        "v_std_kms": summary.v_std_kms,
+        "v_sem_kms": summary.v_sem_kms,
     }
     path.write_text(json.dumps(payload, indent=2))

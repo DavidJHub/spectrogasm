@@ -7,6 +7,12 @@ from .pipeline import (
     calibrate_all,
     calibrate_night,
 )
+from .radial_velocity import (
+    STELLAR_LINES,
+    RVSummary,
+    measure_rv_night,
+    summarize_rv,
+)
 
 __all__ = [
     "NIGHTS",
@@ -16,4 +22,8 @@ __all__ = [
     "CalibrationResult",
     "calibrate_night",
     "calibrate_all",
+    "STELLAR_LINES",
+    "RVSummary",
+    "measure_rv_night",
+    "summarize_rv",
 ]
