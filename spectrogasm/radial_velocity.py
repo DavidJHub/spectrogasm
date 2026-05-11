@@ -33,11 +33,27 @@ C_KMS = 299_792.458
 
 # Laboratory rest wavelengths (air, Å) for the stellar absorption lines
 # used to measure the radial velocity.
+#
+# HD 49331 is an M1 III giant: its visible spectrum is dominated by
+# molecular bands (TiO, CN) that wash out weak atomic features. The
+# 2024-03-12 and 2024-03-19 rv_diagnostic plots show no absorption at
+# lambda_lab for V 6039.7256, V 6081.4422 and V 6090.2084 (the deepest
+# features in those windows are unrelated lines ~+1 A redward, which
+# previously biased the CCF estimator to ~+70 km/s). Keep only the
+# three lines that are reliably visible in this spectral type.
 STELLAR_LINES: list[tuple[str, float]] = [
-    ("V",  6039.7256),
     ("V",  6058.1420),
-    ("V",  6081.4422),
-    ("V",  6090.2084),
+    ("Ni", 6108.1159),
+    ("Ti", 6126.2160),
+]
+
+# Full original line list. Re-enable selectively if running on a star of
+# a different spectral type where the V lines are stronger.
+STELLAR_LINES_EXTENDED: list[tuple[str, float]] = [
+    ("V",  6039.7256),  # disabled: no absorption at lam_lab in HD 49331 (M1 III)
+    ("V",  6058.1420),
+    ("V",  6081.4422),  # disabled: no absorption at lam_lab in HD 49331 (M1 III)
+    ("V",  6090.2084),  # disabled: no absorption at lam_lab in HD 49331 (M1 III)
     ("Ni", 6108.1159),
     ("Ti", 6126.2160),
 ]
@@ -492,7 +508,7 @@ def plot_rv_ccf(
 def plot_rv_diagnostic(
     star: pd.DataFrame,
     out_path: str | Path,
-    lines: list[tuple[str, float]] = STELLAR_LINES,
+    lines: list[tuple[str, float]] = STELLAR_LINES_EXTENDED,
     context_half: float = 5.0,
     fit_half: float = 2.0,
     lambda_col: str = "lambda_rest",
