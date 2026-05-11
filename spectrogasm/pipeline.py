@@ -27,7 +27,8 @@ class CalibrationParams:
     match_tol: float = 0.20
     n_lines: int = 20
     min_line_separation: float = 8.0
-    outlier_threshold: float = 0.08
+    sigma_clip_kappa: float = 3.0
+    sigma_clip_max_iter: int = 10
     make_plots: bool = True
 
 
@@ -85,13 +86,15 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
     )
     print(f"[{night.date}] matched: {len(matched)}  selected: {len(selected)}")
 
-    # 5) Final polynomial fit with one outlier-rejection pass.
+    # 5) Final polynomial fit with iterative kappa-sigma clipping.
     solution = fitting.fit_solution(
-        selected, outlier_threshold=params.outlier_threshold
+        selected,
+        kappa=params.sigma_clip_kappa,
+        max_iter=params.sigma_clip_max_iter,
     )
     print(
         f"[{night.date}] degree={solution.degree}  rms={solution.rms:.4f} A  "
-        f"lines used={len(solution.lines)}"
+        f"lines used={len(solution.lines)}  iters={solution.n_iter}"
     )
 
     # 6) Apply pixel -> lambda to lamp and star.

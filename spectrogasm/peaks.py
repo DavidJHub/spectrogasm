@@ -1,9 +1,16 @@
-"""Peak detection and sub-pixel centroid refinement."""
+"""Peak detection and sub-pixel centroid refinement.
+
+The centroid is refined with a Gaussian fit over +/- ``window`` pixels around
+the integer-pixel peak. Compared to a 3-point parabola, this is far less
+biased when the line is slightly asymmetric or when the true peak does not
+fall close to the central pixel, at the cost of one curve_fit call per peak.
+"""
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
 
 
@@ -17,43 +24,66 @@ def detect_peaks(
     return idx, props["prominences"]
 
 
+def _gauss(x: np.ndarray, A: float, mu: float, sigma: float, offset: float) -> np.ndarray:
+    return A * np.exp(-0.5 * ((x - mu) / sigma) ** 2) + offset
+
+
 def refine_centroids(
     pixel: np.ndarray,
     intensity: np.ndarray,
     peak_idx: np.ndarray,
     prominences: np.ndarray,
+    window: int = 3,
+    max_sigma: float = 5.0,
 ) -> pd.DataFrame:
-    """Refine each integer-pixel peak with a 3-point parabolic fit.
+    """Refine each integer-pixel peak with a Gaussian fit on +/- ``window`` px.
 
-    Peaks whose vertex falls more than 0.8 px away from the integer maximum
-    (or whose quadratic coefficient is zero) are discarded as unreliable.
+    Peaks are discarded when:
+      * the fitting window runs off the array,
+      * ``curve_fit`` fails to converge,
+      * the fitted centre drifts more than 1 px from the integer peak,
+      * the fitted width is non-positive or larger than ``max_sigma`` px
+        (suggests a blend or noise spike rather than a real line).
     """
     rows = []
     n = len(intensity)
 
     for p, prom in zip(peak_idx, prominences):
-        if not (1 <= p < n - 1):
+        lo = int(p) - window
+        hi = int(p) + window + 1
+        if lo < 0 or hi > n or (hi - lo) < 4:
             continue
 
-        x = np.array([p - 1, p, p + 1], dtype=float)
-        y = intensity[p - 1 : p + 2].astype(float)
+        x = pixel[lo:hi].astype(float)
+        y = intensity[lo:hi].astype(float)
 
-        a, b, c = np.polyfit(x, y, 2)
-        if a == 0:
-            continue
+        offset0 = float(y.min())
+        A0 = float(y.max() - offset0)
+        mu0 = float(p)
+        sigma0 = 1.5
 
-        x_centro = -b / (2 * a)
-        y_centro = a * x_centro**2 + b * x_centro + c
-
-        if (p - 0.8) <= x_centro <= (p + 0.8):
-            rows.append(
-                {
-                    "pixel_bruto": int(p),
-                    "pixel_centro": x_centro,
-                    "intensidad": y_centro,
-                    "prominencia": prom,
-                }
+        try:
+            popt, _ = curve_fit(
+                _gauss, x, y, p0=[A0, mu0, sigma0, offset0], maxfev=500
             )
+        except (RuntimeError, ValueError):
+            continue
+
+        A, mu, sigma, offset = popt
+        sigma = abs(sigma)
+
+        if abs(mu - p) > 1.0 or sigma <= 0 or sigma > max_sigma or A <= 0:
+            continue
+
+        rows.append(
+            {
+                "pixel_bruto": int(p),
+                "pixel_centro": float(mu),
+                "intensidad": float(A + offset),
+                "prominencia": float(prom),
+                "sigma_line": float(sigma),
+            }
+        )
 
     return (
         pd.DataFrame(rows)
