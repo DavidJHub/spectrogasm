@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import fingerprint as fp_mod
-from . import fitting, io, matching, peaks, plotting, radial_velocity as rv_mod, seeds, telluric
+from . import fitting, io, matching, peaks, plotting, radial_velocity as rv_mod, science, seeds, telluric
 from .manifest import ATLAS_PATH, FINGERPRINT_PATH, RESULTS_DIR, Night
 
 
@@ -45,6 +45,11 @@ class CalibrationResult:
     matched: pd.DataFrame
     rv_lines: pd.DataFrame
     rv_summary: rv_mod.RVSummary
+    ew: pd.DataFrame
+    resolution: pd.DataFrame
+    resolution_summary: science.ResolutionSummary
+    snr: float
+    per_element_rv: pd.DataFrame
     out_dir: Path
 
 
@@ -141,20 +146,38 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         f"{rv_summary.v_sem_kms:.3f} km/s  (n={rv_summary.n_used})"
     )
 
-    # 9) Persist artifacts.
+    # 9) Extra science measurements: EW, spectral R, SNR, per-element RV.
+    ew = science.equivalent_widths(rv_lines)
+    res = science.spectral_resolution(thar, solution.lines)
+    res_summary = science.summarize_resolution(res)
+    snr = science.estimate_snr(star)
+    per_elem = science.per_element_rv(rv_lines)
+    print(
+        f"[{night.date}] R = {res_summary.R_median:.0f}  "
+        f"SNR ~ {snr:.0f}  "
+        f"EW(V/Ni/Ti) ok = {int(ew['ok'].sum())}/{len(ew)}"
+    )
+
+    # 10) Persist artifacts.
     io.save_table(thar, out_dir / "thar_calibrado.csv")
     io.save_table(star, out_dir / "estrella_calibrada.csv")
     io.save_table(solution.lines, out_dir / "lineas_calibracion.csv")
     io.save_table(rv_lines, out_dir / "rv_lines.csv")
+    io.save_table(ew, out_dir / "equivalent_widths.csv")
+    io.save_table(res, out_dir / "resolution_per_line.csv")
     _save_solution_metadata(night, solution, v_tel, seed_origin, out_dir / "solution.json")
     _save_rv_metadata(night, rv_summary, out_dir / "rv.json")
+    science.save_science_json(
+        night.date, ew, res, res_summary, snr, per_elem,
+        out_dir / "science.json",
+    )
 
-    # 10) If this is the reference (manual) night, refresh the fingerprint.
+    # 11) If this is the reference (manual) night, refresh the fingerprint.
     if seed_origin == "manual":
         fp_mod.save_fingerprint(thar, solution.lines, FINGERPRINT_PATH)
         print(f"[{night.date}] fingerprint refreshed -> {FINGERPRINT_PATH}")
 
-    # 11) Diagnostic plots.
+    # 12) Diagnostic plots.
     if params.make_plots:
         plotting.plot_spectrum(thar, f"Th-Ar  ·  {night.date}",
                                out_dir / "thar.png", fill=True)
@@ -175,6 +198,11 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         matched=matched,
         rv_lines=rv_lines,
         rv_summary=rv_summary,
+        ew=ew,
+        resolution=res,
+        resolution_summary=res_summary,
+        snr=snr,
+        per_element_rv=per_elem,
         out_dir=out_dir,
     )
 
