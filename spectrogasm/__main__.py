@@ -2,10 +2,13 @@
 
 Usage:
 
-    python -m spectrogasm                # run every night in manifest.NIGHTS
+    python -m spectrogasm                # run every night discovered in data/
     python -m spectrogasm 2024-03-12     # run only the listed dates
 
-All paths (data, seeds, atlas, results) are hardcoded in ``manifest.py``.
+Nights are auto-discovered from ``data/`` by ``manifest.discover_nights``
+(pattern ``estrella_YY-MM-DD.dat`` + ``thar_YY-MM-DD.dat``); the atlas
+``data/thar_uves.dat`` is shared across all nights. Output goes to
+``results/<ISO date>/``.
 """
 
 from __future__ import annotations
