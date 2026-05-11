@@ -37,8 +37,10 @@ def main(argv: list[str]) -> None:
         print(
             f"  {r.night.date}  deg={r.solution.degree}  "
             f"rms={r.solution.rms:.4f} A  v_tel={r.telluric_kms:+.3f} km/s  "
-            f"v_rad={r.rv_summary.v_mean_kms:+.3f}+/-{r.rv_summary.v_sem_kms:.3f} km/s "
-            f"(n={r.rv_summary.n_used})  seed={r.seed_origin}  -> {r.out_dir}"
+            f"v_rad(per-line)={r.rv_summary.v_mean_kms:+.3f}"
+            f"+/-{r.rv_summary.v_sem_kms:.3f}  "
+            f"v_rad(joint)={r.rv_summary_joint.v_mean_kms:+.3f}  "
+            f"seed={r.seed_origin}  -> {r.out_dir}"
         )
 
     if len(results) >= 2:
@@ -48,7 +50,15 @@ def main(argv: list[str]) -> None:
 
         rv_path = RESULTS_DIR / "rv_drift.png"
         plot_rv_drift(RESULTS_DIR, rv_path)
-        print(f"Radial-velocity plot: {rv_path}")
+        print(f"Radial-velocity plot (per-line): {rv_path}")
+
+        rv_joint_path = RESULTS_DIR / "rv_drift_joint.png"
+        plot_rv_drift(
+            RESULTS_DIR, rv_joint_path,
+            filename="rv_joint.json",
+            title="Velocidad radial estelar por noche  ·  conjunto (σ compartido)",
+        )
+        print(f"Radial-velocity plot (joint):    {rv_joint_path}")
 
 
 if __name__ == "__main__":

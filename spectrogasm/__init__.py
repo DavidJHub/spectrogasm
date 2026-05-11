@@ -12,6 +12,7 @@ from .radial_velocity import (
     STELLAR_LINES,
     RVSummary,
     measure_rv_night,
+    measure_rv_night_joint,
     summarize_rv,
 )
 from .science import (
@@ -33,6 +34,7 @@ __all__ = [
     "STELLAR_LINES",
     "RVSummary",
     "measure_rv_night",
+    "measure_rv_night_joint",
     "summarize_rv",
     "ResolutionSummary",
     "equivalent_widths",
