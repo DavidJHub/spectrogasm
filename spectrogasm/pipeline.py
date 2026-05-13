@@ -186,7 +186,8 @@ def calibrate_night(night: Night, params: CalibrationParams | None = None) -> Ca
         plotting.plot_spectrum(thar, f"Th-Ar  ·  {night.date}",
                                out_dir / "thar.png", fill=True)
         plotting.plot_spectrum(star, f"Estrella  ·  {night.date}",
-                               out_dir / "estrella.png", fill=False)
+                               out_dir / "estrella.png", fill=False,
+                               lines=rv_mod.STELLAR_LINES)
         plotting.plot_lines_used(thar, solution.lines, out_dir / "lineas.png")
         rv_mod.plot_rv_fits(
             star, rv_lines, out_dir / "rv_fits.png",
